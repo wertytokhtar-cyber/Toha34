@@ -1,63 +1,38 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-// Вход и регистрация по email + паролю. Это пример — Codex поможет улучшить (Google-вход и т.д.).
-export function Auth() {
+type AuthProps = { onAuthenticated: () => void; onBack: () => void };
+
+export function Auth({ onAuthenticated, onBack }: AuthProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setMessage('');
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault(); setBusy(true); setMessage('');
     try {
-      const fn =
-        mode === 'signup'
-          ? supabase.auth.signUp({ email, password })
-          : supabase.auth.signInWithPassword({ email, password });
-      const { error } = await fn;
-      if (error) setMessage(error.message);
-      else if (mode === 'signup') setMessage('Готово! Проверь почту, если нужна подтверждалка.');
-    } catch {
-      setMessage('Что-то пошло не так. Попробуй ещё раз.');
-    } finally {
-      setBusy(false);
-    }
+      const result = mode === 'signup'
+        ? await supabase.auth.signUp({ email, password })
+        : await supabase.auth.signInWithPassword({ email, password });
+      if (result.error) setMessage(result.error.message);
+      else if (result.data.session) onAuthenticated();
+      else setMessage('Аккаунт создан. Подтверди email и затем войди.');
+    } catch { setMessage('Не удалось подключиться. Попробуй ещё раз.'); }
+    finally { setBusy(false); }
   }
 
-  return (
-    <section className="card">
-      <h2>{mode === 'signin' ? 'Вход' : 'Регистрация'}</h2>
-      <form onSubmit={handleSubmit} className="form">
-        <input
-          type="email"
-          placeholder="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <input
-          type="password"
-          placeholder="пароль (6+ символов)"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          minLength={6}
-          required
-        />
-        <button type="submit" disabled={busy}>
-          {busy ? '…' : mode === 'signin' ? 'Войти' : 'Создать аккаунт'}
-        </button>
-      </form>
-      {message && <p className="message">{message}</p>}
-      <button
-        className="ghost"
-        onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
-      >
-        {mode === 'signin' ? 'Нет аккаунта? Зарегистрируйся' : 'Уже есть аккаунт? Войти'}
-      </button>
-    </section>
-  );
+  return <main className="login-screen"><section className="login-card">
+    <p className="eyebrow">ЧЕРНИЛЬНЫЙ ДОЛГ</p>
+    <h1>{mode === 'signin' ? 'Вход в игру' : 'Новый герой'}</h1>
+    <form onSubmit={handleSubmit} className="login-form">
+      <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+      <input type="password" placeholder="Пароль — минимум 6 символов" value={password} onChange={(e) => setPassword(e.target.value)} minLength={6} required />
+      <button type="submit" disabled={busy}>{busy ? 'Подождите…' : mode === 'signin' ? 'ВОЙТИ' : 'СОЗДАТЬ АККАУНТ'}</button>
+    </form>
+    {message && <p className="login-message">{message}</p>}
+    <button className="text-button" onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}>{mode === 'signin' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}</button>
+    <button className="text-button" onClick={onBack}>← Назад</button>
+  </section></main>;
 }
