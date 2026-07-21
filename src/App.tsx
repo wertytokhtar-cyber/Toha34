@@ -13,7 +13,7 @@ type AttackKind = 'fire' | 'fist' | 'minion' | 'gear' | 'laser' | 'clock' | 'bub
 type EnemyShot = Shot & { lane: 'low' | 'high'; kind: AttackKind };
 type Language = 'ru' | 'en' | 'fr';
 type Difficulty = 'easy' | 'normal' | 'hard';
-type OnlineState = { id:string; x:number; jumping:boolean; moving:boolean; facingLeft:boolean; hero:number; shot:number; bossHealth:number; lives:number; level:number };
+type OnlineState = { id:string; x:number; jumping:boolean; moving:boolean; facingLeft:boolean; hero:number; weapon:Weapon; shot:number; bossHealth:number; lives:number; level:number };
 const difficulties = {
   easy: { label:'ЛЁГКАЯ', bossHp:3500, attackSpeed:1.25, damage:1 },
   normal: { label:'ОБЫЧНАЯ', bossHp:5000, attackSpeed:1, damage:1 },
@@ -128,7 +128,7 @@ export default function App() {
   const jumping2Ref = useRef(isJumping2);
   const clientId = useRef(crypto.randomUUID());
   const remoteShot = useRef(0);
-  const onlineSnapshot = useRef({ moving:false, facingLeft:false, hero:0, shot:0, bossHealth:5000, lives:3, level:0 });
+  const onlineSnapshot = useRef({ moving:false, facingLeft:false, hero:0, weapon:'normal' as Weapon, shot:0, bossHealth:5000, lives:3, level:0 });
   const bossMaxHealth = difficulties[difficulty].bossHp;
   const bossPhase = bossHealth > bossMaxHealth * .75 ? 1 : bossHealth > bossMaxHealth * .5 ? 2 : bossHealth > bossMaxHealth * .25 ? 3 : 4;
   const level = levels[levelIndex];
@@ -163,7 +163,7 @@ export default function App() {
     const { data } = supabase.auth.onAuthStateChange((_event, session) => { if (session) setAccessScreen('game'); });
     return () => data.subscription.unsubscribe();
   }, []);
-  useEffect(() => { onlineSnapshot.current = { moving:isMoving, facingLeft, hero:heroIndex, shot:shotNonce, bossHealth, lives, level:levelIndex }; }, [bossHealth, facingLeft, heroIndex, isMoving, levelIndex, lives, shotNonce]);
+  useEffect(() => { onlineSnapshot.current = { moving:isMoving, facingLeft, hero:heroIndex, weapon, shot:shotNonce, bossHealth, lives, level:levelIndex }; }, [bossHealth, facingLeft, heroIndex, isMoving, levelIndex, lives, shotNonce, weapon]);
   useEffect(() => {
     if (!onlineMode || onlineRoom.trim().length < 3) { setOnlineStatus('не подключено'); return; }
     const channel = supabase.channel(`boss-rush:${onlineRoom.trim().toUpperCase()}`, { config:{ presence:{ key:clientId.current } } });
@@ -172,12 +172,12 @@ export default function App() {
       if (!payload || payload.id === clientId.current) return;
       setPlayer2X(payload.x); setIsJumping2(payload.jumping); setIsMoving2(payload.moving); setFacingLeft2(payload.facingLeft); setHero2Index(payload.hero);
       if (payload.level === onlineSnapshot.current.level) { setBossHealth((health) => Math.min(health, payload.bossHealth)); setLives((value) => Math.min(value, payload.lives)); }
-      if (payload.shot > remoteShot.current) { remoteShot.current = payload.shot; setShots((current) => [...current, { id:shotId.current++, x:payload.x + 7, weapon }]); }
+      if (payload.shot > remoteShot.current) { remoteShot.current = payload.shot; setShots((current) => [...current, { id:shotId.current++, x:payload.x + 7, weapon:payload.weapon ?? 'normal' }]); }
     });
     channel.subscribe(async (status) => { if (status === 'SUBSCRIBED') { setOnlineStatus('подключено'); await channel.track({ joinedAt:Date.now() }); } else if (status === 'CHANNEL_ERROR') setOnlineStatus('ошибка соединения'); });
-    const timer = window.setInterval(() => { const state = onlineSnapshot.current; void channel.send({ type:'broadcast', event:'state', payload:{ id:clientId.current, x:playerXRef.current, jumping:jumpingRef.current, moving:state.moving, facingLeft:state.facingLeft, hero:state.hero, shot:state.shot, bossHealth:state.bossHealth, lives:state.lives, level:state.level } satisfies OnlineState }); }, 90);
+    const timer = window.setInterval(() => { const state = onlineSnapshot.current; void channel.send({ type:'broadcast', event:'state', payload:{ id:clientId.current, x:playerXRef.current, jumping:jumpingRef.current, moving:state.moving, facingLeft:state.facingLeft, hero:state.hero, weapon:state.weapon, shot:state.shot, bossHealth:state.bossHealth, lives:state.lives, level:state.level } satisfies OnlineState }); }, 90);
     return () => { window.clearInterval(timer); void supabase.removeChannel(channel); setOnlinePlayers(1); };
-  }, [onlineMode, onlineRoom, weapon]);
+  }, [onlineMode, onlineRoom]);
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -185,6 +185,14 @@ export default function App() {
     audio.muted = !musicEnabled;
     if (musicEnabled) void audio.play().catch(() => undefined);
   }, [musicEnabled, musicVolume]);
+  useEffect(() => {
+    const unlockAudio = () => {
+      const audio = audioRef.current;
+      if (audio && musicEnabled && audio.paused) void audio.play().catch(() => undefined);
+    };
+    window.addEventListener('pointerdown', unlockAudio, { once:true });
+    return () => window.removeEventListener('pointerdown', unlockAudio);
+  }, [musicEnabled]);
 
   const jump = useCallback(() => {
     if (!started || paused || flyMode || isJumping || lives <= 0) return;
@@ -248,6 +256,8 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
       if (event.code === 'KeyA') { movement.current.left = true; facing.current = -1; setFacingLeft(true); setIsMoving(true); }
       if (event.code === 'KeyD') { movement.current.right = true; facing.current = 1; setFacingLeft(false); setIsMoving(true); }
       if (multiplayer && !onlineMode && event.key === 'ArrowLeft') { movement2.current.left = true; setFacingLeft2(true); setIsMoving2(true); }
@@ -352,15 +362,16 @@ export default function App() {
 
   useEffect(() => {
     if (!started || paused || level.theme !== 'fire' || bossPhase !== 2 || lives <= 0) return;
+    let impactTimer = 0;
     const slam = window.setInterval(() => {
       setBossSlamming(true);
-      window.setTimeout(() => {
+      impactTimer = window.setTimeout(() => {
         const insideLandingZone = Math.abs(playerXRef.current - 64) <= 20;
         if (!jumpingRef.current && insideLandingZone) setLives((value) => Math.max(0, value - difficulties[difficulty].damage));
         setBossSlamming(false);
       }, 850);
     }, Math.round(3200 * difficulties[difficulty].attackSpeed));
-    return () => window.clearInterval(slam);
+    return () => { window.clearInterval(slam); window.clearTimeout(impactTimer); setBossSlamming(false); };
   }, [bossPhase, difficulty, level.theme, lives, paused, started]);
 
   useEffect(() => {
@@ -395,7 +406,7 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [bossPhase, difficulty, invulnerable, paused, secondPlayerReady]);
 
-  const restart = () => { setBossHealth(bossMaxHealth); setShots([]); setEnemyShots([]); setLives(heroStats.health + (secondPlayerReady ? 2 : 0)); setPlayerX(14); setPlayer2X(24); setIsJumping(false); setIsJumping2(false); setBossSlamming(false); setSuperMeter(0); setUltimateActive(false); setNovaActive(false); setTimeFrozen(false); setInked(false); setPaused(false); setSettingsOpen(false); setStarted(true); };
+  const restart = () => { movement.current = { left:false, right:false, up:false, down:false }; movement2.current = { left:false, right:false }; setBossHealth(bossMaxHealth); setShots([]); setEnemyShots([]); setLives(heroStats.health + (secondPlayerReady ? 2 : 0)); setPlayerX(14); setPlayer2X(24); setIsJumping(false); setIsJumping2(false); setIsMoving(false); setIsMoving2(false); setIsCrouching(false); setBossSlamming(false); setSuperMeter(0); setUltimateActive(false); setNovaActive(false); setTimeFrozen(false); setInked(false); setInvulnerable(false); setFlightY(0); setPaused(false); setSettingsOpen(false); setStarted(true); };
   const openContract = (index: number) => { setLevelIndex(index); restart(); setStarted(false); setMapOpen(false); };
 
   if (accessScreen === 'choose') return <main className="login-screen"><section className="login-card welcome-card"><p className="eyebrow">ЧЕРНИЛЬНЫЙ ДОЛГ</p><h1>Выбери игру</h1><p>Три отдельных режима доступны с одного экрана.</p><button onClick={() => setAccessScreen('auth')}>ВОЙТИ ИЛИ СОЗДАТЬ АККАУНТ</button><button className="guest-button" onClick={() => setAccessScreen('game')}>ИГРАТЬ В BOSS-RUSH</button><button className="snake-button" onClick={() => setAccessScreen('snake')}>ЗАПУСТИТЬ ЗМЕЙКУ 3D</button><button className="duel-button" onClick={() => setAccessScreen('duel')}>КРЕПОСТНАЯ ДУЭЛЬ</button></section></main>;

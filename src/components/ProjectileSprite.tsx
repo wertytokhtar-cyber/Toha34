@@ -1,24 +1,22 @@
 import { useEffect, useRef } from 'react';
 
 type Props = { src:string; className?:string; label?:string };
+const spriteCache = new Map<string, Promise<HTMLCanvasElement>>();
 
-// Удаляет однотонный фон и плотно обрезает снаряд при загрузке.
-export default function ProjectileSprite({ src, className = 'projectile-sprite', label = 'Снаряд' }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+function loadSprite(src:string): Promise<HTMLCanvasElement> {
+  const cached = spriteCache.get(src);
+  if (cached) return cached;
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext('2d', { willReadFrequently:true });
-    if (!canvas || !context) return;
-
+  const pending = new Promise<HTMLCanvasElement>((resolve, reject) => {
     const image = new Image();
     image.src = src;
+    image.onerror = () => reject(new Error(`Не удалось загрузить снаряд: ${src}`));
     image.onload = () => {
       const work = document.createElement('canvas');
       work.width = image.naturalWidth;
       work.height = image.naturalHeight;
       const workContext = work.getContext('2d', { willReadFrequently:true });
-      if (!workContext) return;
+      if (!workContext) { reject(new Error('Canvas недоступен')); return; }
       workContext.drawImage(image, 0, 0);
       const frame = workContext.getImageData(0, 0, work.width, work.height);
       const pixels = frame.data;
@@ -43,11 +41,35 @@ export default function ProjectileSprite({ src, className = 'projectile-sprite',
       workContext.putImageData(frame, 0, 0);
       const width = Math.max(1, right - left + 1);
       const height = Math.max(1, bottom - top + 1);
-      canvas.width = width;
-      canvas.height = height;
-      context.clearRect(0, 0, width, height);
-      context.drawImage(work, left, top, width, height, 0, 0, width, height);
+      const scale = Math.min(1, 320 / Math.max(width, height));
+      const sprite = document.createElement('canvas');
+      sprite.width = Math.max(1, Math.round(width * scale));
+      sprite.height = Math.max(1, Math.round(height * scale));
+      sprite.getContext('2d')?.drawImage(work, left, top, width, height, 0, 0, sprite.width, sprite.height);
+      resolve(sprite);
     };
+  });
+  spriteCache.set(src, pending);
+  pending.catch(() => spriteCache.delete(src));
+  return pending;
+}
+
+// Удаляет однотонный фон и плотно обрезает снаряд при загрузке.
+export default function ProjectileSprite({ src, className = 'projectile-sprite', label = 'Снаряд' }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) return;
+    let active = true;
+    void loadSprite(src).then((sprite) => {
+      if (!active) return;
+      canvas.width = sprite.width;
+      canvas.height = sprite.height;
+      context.drawImage(sprite, 0, 0);
+    }).catch(() => undefined);
+    return () => { active = false; };
   }, [src]);
 
   return <canvas ref={canvasRef} className={className} aria-label={label} />;
