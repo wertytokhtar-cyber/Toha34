@@ -215,6 +215,7 @@ kbd { display: inline-block; min-width: 26px; margin-right: 4px; padding: 5px 7p
 .enemy-shot--fire.enemy-shot--art { width:94px;height:70px;filter:drop-shadow(0 0 12px #ff5a12);animation:enemy-fire-drift .23s ease-in-out infinite alternate; }
 .enemy-shot--bubble.enemy-shot--art { width:64px;height:64px;filter:drop-shadow(0 0 13px #52e7ff);animation:bubble-float .8s ease-in-out infinite alternate; }
 .enemy-shot--barrel.enemy-shot--art { width:82px;height:72px;filter:drop-shadow(0 7px 4px #2119);animation:gear-roll .65s linear infinite; }
+.enemy-shot--fist.enemy-shot--art { width:112px;height:78px;filter:drop-shadow(0 0 12px #ff681d);animation:fist-punch .34s ease-in-out infinite alternate; }
 @keyframes projectile-pulse { to { transform:scale(1.08); } }
 @keyframes enemy-fire-drift { to { transform:translateY(-4px) scale(1.06); } }
 .ai-coach-button { border-color:#bda2ff!important;background:linear-gradient(145deg,#56379a,#2d1d58)!important;color:#fff!important;box-shadow:0 0 12px #9d70ff66; }

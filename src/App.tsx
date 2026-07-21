@@ -51,6 +51,7 @@ const weaponProjectileAssets: Partial<Record<Weapon, string>> = {
 };
 const bossProjectileAssets: Partial<Record<AttackKind, string>> = {
   fire:'/assets/projectile-fireball-v2-source.png',
+  fist:'/assets/projectile-fist-v2-source.png',
   bubble:'/assets/projectile-orb-v2-source.png',
   barrel:'/assets/projectile-barrel-v2-source.png',
 };
@@ -334,13 +335,15 @@ export default function App() {
     ];
     const delays = [[900, 1150, 680, 470], [980, 850, 720, 440], [950, 1200, 720, 520], [820, 1050, 680, 430], [1100, 760, 900, 470]];
     const kind = patterns[levelIndex][bossPhase - 1];
-    const delay = Math.round(delays[levelIndex][bossPhase - 1] * difficulties[difficulty].attackSpeed);
+    // Небольшая передышка между сериями делает паттерны читаемыми и честными.
+    const delay = Math.round(delays[levelIndex][bossPhase - 1] * difficulties[difficulty].attackSpeed * 1.25);
     const attack = window.setInterval(() => {
-      const counts: Partial<Record<AttackKind, number>> = { mug:3, barrel:2, carrot:4, potato:2, onion:3, fire:3, minion:4, gear:3, laser:2, clock:5 };
+      const counts: Partial<Record<AttackKind, number>> = { mug:2, barrel:1, carrot:3, potato:1, onion:2, fire:2, minion:2, gear:2, laser:1, clock:3 };
       const count = counts[kind] ?? 1;
+      const isVegetableVolley = kind === 'carrot' || kind === 'potato' || kind === 'onion';
       const volley = Array.from({ length: count }, (_, index): EnemyShot => ({
-        id: shotId.current++, x: 82 + index * (kind === 'laser' ? 16 : 6),
-        lane: (kind === 'barrel' || kind === 'potato') ? 'low' : (kind === 'mug' || kind === 'onion') ? (index % 3 === 0 ? 'low' : 'high') : index % 2 === 0 ? 'low' : 'high', kind,
+        id: shotId.current++, x: 82 + index * (isVegetableVolley ? 12 : kind === 'laser' ? 16 : 8),
+        lane: isVegetableVolley || kind === 'barrel' ? 'low' : kind === 'mug' ? (index % 2 === 0 ? 'low' : 'high') : index % 2 === 0 ? 'low' : 'high', kind,
       }));
       setEnemyShots((current) => [...current, ...volley]);
     }, delay);
