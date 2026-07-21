@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 
 type Props = { src?: string; className?: string; label?: string; fitScale?: number };
 
-export default function HeroSprite({ src = '/assets/hero-muscular.png', className = 'hero-sprite', label = 'Игровой герой', fitScale = 1 }: Props) {
+export default function HeroSprite({ src = '/assets/hero-muhamedi.png', className = 'hero-sprite', label = 'Игровой герой', fitScale = 1 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {

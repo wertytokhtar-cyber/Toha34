@@ -23,6 +23,15 @@ export function Auth({ onAuthenticated, onBack }: AuthProps) {
     finally { setBusy(false); }
   }
 
+  async function signInWithGoogle() {
+    setBusy(true); setMessage('');
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) { setMessage(`Google: ${error.message}`); setBusy(false); }
+  }
+
   return <main className="login-screen"><section className="login-card">
     <p className="eyebrow">ЧЕРНИЛЬНЫЙ ДОЛГ</p>
     <h1>{mode === 'signin' ? 'Вход в игру' : 'Новый герой'}</h1>
@@ -31,6 +40,8 @@ export function Auth({ onAuthenticated, onBack }: AuthProps) {
       <input type="password" placeholder="Пароль — минимум 6 символов" value={password} onChange={(e) => setPassword(e.target.value)} minLength={6} required />
       <button type="submit" disabled={busy}>{busy ? 'Подождите…' : mode === 'signin' ? 'ВОЙТИ' : 'СОЗДАТЬ АККАУНТ'}</button>
     </form>
+    <div className="auth-divider"><span>или</span></div>
+    <button className="google-auth-button" onClick={signInWithGoogle} disabled={busy}><i>G</i> ПРОДОЛЖИТЬ С GOOGLE</button>
     {message && <p className="login-message">{message}</p>}
     <button className="text-button" onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}>{mode === 'signin' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}</button>
     <button className="text-button" onClick={onBack}>← Назад</button>
