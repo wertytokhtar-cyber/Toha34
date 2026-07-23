@@ -5,7 +5,9 @@ import { Auth } from './components/Auth';
 import { Snake3D } from './components/Snake3D';
 import { CastleDuel } from './components/CastleDuel';
 import { GeminiCoach } from './components/GeminiCoach';
+import { DeviceMode, IntroScreen } from './components/IntroScreen';
 import { supabase } from './lib/supabase';
+import { playCombatSound } from './lib/combatSound';
 
 type Weapon = 'normal' | 'fireball' | 'spread' | 'ray' | 'frost' | 'plasma' | 'rocket' | 'boomerang';
 type Shot = { id: number; x: number; weapon?: Weapon };
@@ -64,6 +66,13 @@ const heroSkins: ReadonlyArray<ReadonlyArray<HeroSkin>> = [
 ];
 
 export default function App() {
+  const [introOpen, setIntroOpen] = useState(true);
+  const [deviceMode, setDeviceMode] = useState<DeviceMode>(() => {
+    try {
+      const saved = localStorage.getItem('contract-device-mode');
+      return saved === 'desktop' || saved === 'mobile' ? saved : 'auto';
+    } catch { return 'auto'; }
+  });
   const [difficulty, setDifficulty] = useState<Difficulty>('normal');
   const [playerX, setPlayerX] = useState(14);
   const [player2X, setPlayer2X] = useState(24);
@@ -88,6 +97,11 @@ export default function App() {
   const [isMoving, setIsMoving] = useState(false);
   const [facingLeft, setFacingLeft] = useState(false);
   const [bossSlamming, setBossSlamming] = useState(false);
+  const [heroAttacking, setHeroAttacking] = useState(false);
+  const [bossAttacking, setBossAttacking] = useState(false);
+  const [damageFlash, setDamageFlash] = useState(false);
+  const [hitBurst, setHitBurst] = useState(0);
+  const [combo, setCombo] = useState(0);
   const [superMeter, setSuperMeter] = useState(0);
   const [ultimateActive, setUltimateActive] = useState(false);
   const [novaActive, setNovaActive] = useState(false);
@@ -119,6 +133,8 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastShotAt = useRef(0);
   const lastShotAt2 = useRef(0);
+  const heroAttackTimer = useRef(0);
+  const comboTimer = useRef(0);
   const movement = useRef({ left: false, right: false, up: false, down: false });
   const movement2 = useRef({ left: false, right: false });
   const facing = useRef(1);
@@ -146,6 +162,10 @@ export default function App() {
     setOwnedSkins((current) => [...current, key]);
     setSelectedSkins((current) => ({ ...current, [heroIndex]:skinId }));
   };
+  useEffect(() => {
+    document.documentElement.dataset.deviceMode = deviceMode;
+    try { localStorage.setItem('contract-device-mode', deviceMode); } catch { /* Игра работает и без сохранения настройки. */ }
+  }, [deviceMode]);
   const activateCheat = () => {
     const code = cheatInput.trim().toUpperCase();
     if (code === 'FLYMODE') { setFlyMode((value) => !value); setFlightY(0); setCheatMessage('Режим полёта переключён'); }
@@ -158,6 +178,10 @@ export default function App() {
   useEffect(() => { player2XRef.current = player2X; }, [player2X]);
   useEffect(() => { jumpingRef.current = isJumping; }, [isJumping]);
   useEffect(() => { jumping2Ref.current = isJumping2; }, [isJumping2]);
+  useEffect(() => () => {
+    window.clearTimeout(heroAttackTimer.current);
+    window.clearTimeout(comboTimer.current);
+  }, []);
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => { if (data.session) setAccessScreen('game'); });
     const { data } = supabase.auth.onAuthStateChange((_event, session) => { if (session) setAccessScreen('game'); });
@@ -204,9 +228,13 @@ export default function App() {
     const now = performance.now();
     if (now - lastShotAt.current < 220) return;
     lastShotAt.current = now;
+    window.clearTimeout(heroAttackTimer.current);
+    setHeroAttacking(true);
+    heroAttackTimer.current = window.setTimeout(() => setHeroAttacking(false), 180);
+    if (musicEnabled) playCombatSound('shot', Math.max(.05, musicVolume * .24));
     setShots((current) => current.length >= 6 ? current : [...current, { id: shotId.current++, x: playerX + 7, weapon }]);
     if (onlineMode) setShotNonce((value) => value + 1);
-  }, [bossHealth, onlineMode, paused, playerX, shopOpen, started, weapon]);
+  }, [bossHealth, musicEnabled, musicVolume, onlineMode, paused, playerX, shopOpen, started, weapon]);
 
   const jump2 = useCallback(() => {
     if (!multiplayer || !started || paused || isJumping2 || lives <= 0) return;
@@ -327,12 +355,17 @@ export default function App() {
           if (oneShot) setOneShot(false);
           setBossHealth((health) => Math.max(0, health - Math.round(damage * heroStats.damage / 100)));
           setSuperMeter((meter) => Math.min(100, meter + hits * 4));
+          setHitBurst((value) => value + 1);
+          if (musicEnabled) playCombatSound('impact', Math.max(.05, musicVolume * .2));
+          setCombo((value) => value + hits);
+          window.clearTimeout(comboTimer.current);
+          comboTimer.current = window.setTimeout(() => setCombo(0), 1800);
         }
         return next;
       });
     }, 32);
     return () => window.clearInterval(timer);
-  }, [heroStats.damage, oneShot, paused]);
+  }, [heroStats.damage, musicEnabled, musicVolume, oneShot, paused]);
 
   useEffect(() => {
     if (!started || paused || bossHealth <= 0 || lives <= 0) return;
@@ -347,7 +380,12 @@ export default function App() {
     const kind = patterns[levelIndex][bossPhase - 1];
     // Небольшая передышка между сериями делает паттерны читаемыми и честными.
     const delay = Math.round(delays[levelIndex][bossPhase - 1] * difficulties[difficulty].attackSpeed * 1.25);
-    const attack = window.setInterval(() => {
+    const pendingAttacks = new Set<number>();
+    const launchAttack = () => {
+      setBossAttacking(true);
+      const timer = window.setTimeout(() => {
+        pendingAttacks.delete(timer);
+        setBossAttacking(false);
       const counts: Partial<Record<AttackKind, number>> = { mug:2, barrel:1, carrot:3, potato:1, onion:2, fire:2, minion:2, gear:2, laser:1, clock:3 };
       const count = counts[kind] ?? 1;
       const isVegetableVolley = kind === 'carrot' || kind === 'potato' || kind === 'onion';
@@ -356,8 +394,11 @@ export default function App() {
         lane: isVegetableVolley || kind === 'barrel' ? 'low' : kind === 'mug' ? (index % 2 === 0 ? 'low' : 'high') : index % 2 === 0 ? 'low' : 'high', kind,
       }));
       setEnemyShots((current) => [...current, ...volley]);
-    }, delay);
-    return () => window.clearInterval(attack);
+      }, 260);
+      pendingAttacks.add(timer);
+    };
+    const attack = window.setInterval(launchAttack, delay);
+    return () => { window.clearInterval(attack); pendingAttacks.forEach(window.clearTimeout); setBossAttacking(false); };
   }, [bossHealth, bossPhase, difficulty, levelIndex, lives, paused, started]);
 
   useEffect(() => {
@@ -393,7 +434,12 @@ export default function App() {
             hitRegistered = true;
             setLives((value) => Math.max(0, value - difficulties[difficulty].damage));
             setInvulnerable(true);
+            setDamageFlash(true);
+            if (musicEnabled) playCombatSound('damage', Math.max(.06, musicVolume * .25));
+            setCombo(0);
+            window.clearTimeout(comboTimer.current);
             window.setTimeout(() => setInvulnerable(false), 900);
+            window.setTimeout(() => setDamageFlash(false), 260);
             if (shot.kind === 'clock') { setTimeFrozen(true); window.setTimeout(() => setTimeFrozen(false), 1200); }
             if (shot.kind === 'ink') { setInked(true); window.setTimeout(() => setInked(false), 1000); }
           }
@@ -404,12 +450,13 @@ export default function App() {
       });
     }, 32);
     return () => window.clearInterval(timer);
-  }, [bossPhase, difficulty, invulnerable, paused, secondPlayerReady]);
+  }, [bossPhase, difficulty, invulnerable, musicEnabled, musicVolume, paused, secondPlayerReady]);
 
-  const restart = () => { movement.current = { left:false, right:false, up:false, down:false }; movement2.current = { left:false, right:false }; setBossHealth(bossMaxHealth); setShots([]); setEnemyShots([]); setLives(heroStats.health + (secondPlayerReady ? 2 : 0)); setPlayerX(14); setPlayer2X(24); setIsJumping(false); setIsJumping2(false); setIsMoving(false); setIsMoving2(false); setIsCrouching(false); setBossSlamming(false); setSuperMeter(0); setUltimateActive(false); setNovaActive(false); setTimeFrozen(false); setInked(false); setInvulnerable(false); setFlightY(0); setPaused(false); setSettingsOpen(false); setStarted(true); };
+  const restart = () => { movement.current = { left:false, right:false, up:false, down:false }; movement2.current = { left:false, right:false }; window.clearTimeout(comboTimer.current); setBossHealth(bossMaxHealth); setShots([]); setEnemyShots([]); setLives(heroStats.health + (secondPlayerReady ? 2 : 0)); setPlayerX(14); setPlayer2X(24); setIsJumping(false); setIsJumping2(false); setIsMoving(false); setIsMoving2(false); setIsCrouching(false); setBossSlamming(false); setHeroAttacking(false); setBossAttacking(false); setDamageFlash(false); setCombo(0); setSuperMeter(0); setUltimateActive(false); setNovaActive(false); setTimeFrozen(false); setInked(false); setInvulnerable(false); setFlightY(0); setPaused(false); setSettingsOpen(false); setStarted(true); };
   const openContract = (index: number) => { setLevelIndex(index); restart(); setStarted(false); setMapOpen(false); };
 
-  if (accessScreen === 'choose') return <main className="login-screen"><section className="login-card welcome-card"><p className="eyebrow">ЧЕРНИЛЬНЫЙ ДОЛГ</p><h1>Выбери игру</h1><p>Три отдельных режима доступны с одного экрана.</p><button onClick={() => setAccessScreen('auth')}>ВОЙТИ ИЛИ СОЗДАТЬ АККАУНТ</button><button className="guest-button" onClick={() => setAccessScreen('game')}>ИГРАТЬ В BOSS-RUSH</button><button className="snake-button" onClick={() => setAccessScreen('snake')}>ЗАПУСТИТЬ ЗМЕЙКУ 3D</button><button className="duel-button" onClick={() => setAccessScreen('duel')}>КРЕПОСТНАЯ ДУЭЛЬ</button></section></main>;
+  if (introOpen) return <IntroScreen deviceMode={deviceMode} onDeviceModeChange={setDeviceMode} onStart={() => setIntroOpen(false)} />;
+  if (accessScreen === 'choose') return <main className="login-screen"><section className="login-card welcome-card"><p className="eyebrow">КОНТРАКТ · ИГРОВАЯ КОЛЛЕКЦИЯ</p><h1>Выбери режим</h1><p>Главная кампания, аркада и тактическая дуэль — в одной игре.</p><button className="guest-button featured-mode" onClick={() => setAccessScreen('game')}><b>BOSS-RUSH</b><small>Главная кампания · 4 уникальных босса</small></button><button onClick={() => setAccessScreen('auth')}>ВОЙТИ ИЛИ СОЗДАТЬ АККАУНТ</button><button className="snake-button" onClick={() => setAccessScreen('snake')}>ЗАПУСТИТЬ ЗМЕЙКУ 3D</button><button className="duel-button" onClick={() => setAccessScreen('duel')}>КРЕПОСТНАЯ ДУЭЛЬ</button><button className="text-button" onClick={() => setIntroOpen(true)}>← НА СТАРТОВЫЙ ЭКРАН</button></section></main>;
   if (accessScreen === 'auth') return <Auth onAuthenticated={() => setAccessScreen('game')} onBack={() => setAccessScreen('choose')} />;
   if (accessScreen === 'snake') return <Snake3D onBack={() => setAccessScreen('choose')} />;
   if (accessScreen === 'duel') return <CastleDuel onBack={() => setAccessScreen('choose')} />;
@@ -422,14 +469,16 @@ export default function App() {
         <div className="header-actions"><button className="crystal-balance" onClick={() => { setCrystalShopOpen(true); setPaused(true); }}>💎 {crystals}</button><button className="shop-button" onClick={() => setMapOpen(true)}>{t.map}</button><button className="shop-button" onClick={() => setHeroMenuOpen(true)}>{t.hero}</button><button className="shop-button" onClick={() => setShopOpen(true)}>{t.shop}</button><button className="shop-button ai-coach-button" onClick={() => { setGeminiOpen(true); setPaused(true); }}>✦ ИИ</button><button className="shop-button settings-button" onClick={() => { setSettingsOpen(true); setPaused(true); }}>⚙ {t.settings}</button><div className="lives" aria-label={`${lives} ${t.lives}`}>{'♥ '.repeat(lives)}<i>{'♥ '.repeat(Math.max(0, heroStats.health - lives))}</i></div></div>
       </header>
 
-      <section key={levelIndex} className={`stage stage--${level.theme} ${timeFrozen ? 'stage--frozen' : ''} ${paused ? 'stage--paused' : ''}`} onClick={shoot}>
+      <section key={levelIndex} className={`stage stage--${level.theme} ${timeFrozen ? 'stage--frozen' : ''} ${damageFlash ? 'stage--damage' : ''} ${paused ? 'stage--paused' : ''}`} onClick={shoot}>
         <div className="adventure-backdrop" aria-hidden="true"><i className="sky-orb" /><i className="cloud cloud--one" /><i className="cloud cloud--two" /><div className="mountains" /><div className="far-land" /><div className="castle"><i /><i /><i /></div><div className="platform platform--one" /><div className="platform platform--two" /></div>
         <div className="map-depth"><i /><i /><i /><i /><i /></div>
         <div className="curtain curtain--left" /><div className="curtain curtain--right" />
         <div className="spotlight" />
         <div className="boss-bar"><span style={{ width: `${bossHealth / bossMaxHealth * 100}%` }} /><b>{t.phase} {bossPhase} · {bossHealth} HP · {difficulties[difficulty].label}</b></div>
         <div className={`super-meter ${superMeter >= 100 ? 'super-meter--ready' : ''}`}><b>{t.ultimate} · Q</b><span><i style={{ width: `${superMeter}%` }} /></span></div>
-        <div className={`boss boss--${level.theme} boss--phase-${bossPhase} ${bossSlamming ? 'boss--slam' : ''}`} aria-label={level.boss}><HeroSprite src={level.asset} className="dragon-sprite" label={level.boss} /></div>
+        <div className={`boss boss--${level.theme} boss--phase-${bossPhase} ${bossSlamming ? 'boss--slam' : ''} ${bossAttacking ? 'boss--attacking' : ''}`} aria-label={level.boss}><HeroSprite src={level.asset} className="dragon-sprite" label={level.boss} />{bossAttacking && <i className="boss-attack-flash" />}</div>
+        {hitBurst > 0 && <div key={hitBurst} className="boss-hit-burst"><i /><i /><i /></div>}
+        {combo >= 2 && <div className="combo-counter"><strong>{combo}</strong><span>COMBO</span></div>}
         {bossSlamming && <div className="landing-wave" aria-label="Зона приземления" />}
         {level.theme === 'fire' && bossPhase === 4 && <div className="dragon-kids" aria-label="Дети дракона"><HeroSprite src="/assets/dragon-source.png" className="dragon-kid dragon-kid--one" /><HeroSprite src="/assets/dragon-source.png" className="dragon-kid dragon-kid--two" /></div>}
         {shots.map((shot) => { const asset = weaponProjectileAssets[shot.weapon ?? 'normal']; return <i className={`shot shot--${shot.weapon ?? 'normal'} ${asset ? 'shot--art' : ''}`} key={shot.id} style={{ left: `${shot.x}%` }}>{asset && <ProjectileSprite src={asset} label="Снаряд героя" />}</i>; })}
@@ -437,7 +486,7 @@ export default function App() {
         {novaActive && <div className="ultimate-nova" />}
         {inked && <div className="ink-splash" aria-label="Чернила закрывают обзор" />}
         {enemyShots.map((shot) => { const asset = bossProjectileAssets[shot.kind]; return <i className={`enemy-shot enemy-shot--${shot.lane} enemy-shot--${shot.kind} ${asset ? 'enemy-shot--art' : ''}`} key={shot.id} style={{ left: `${shot.x}%` }} aria-label="Атака босса">{asset && <ProjectileSprite src={asset} label="Атака босса" />}</i>; })}
-        <div className={`player skin--${selectedSkins[heroIndex]} ${flyMode ? 'player--flying' : ''} ${invulnerable ? 'player--hit' : ''} ${isJumping ? 'player--jump' : ''} ${isCrouching ? 'player--crouch' : ''} ${isMoving ? 'player--moving' : ''} ${facingLeft ? 'player--left' : ''}`} style={{ left: `${playerX}%`, ...(flyMode ? { bottom:`${13 + flightY}%` } : {}) }} onAnimationEnd={(event) => { if (event.animationName === 'jump' || event.animationName === 'jump-left') setIsJumping(false); }}><HeroSprite src={activeHeroAsset} className="hero-sprite hero-sprite--base" fitScale={heroIndex === 0 ? 0.55 : 0.77} /><HeroSprite src={activeHeroRunAsset} className="hero-sprite hero-sprite--run-frame" fitScale={heroIndex === 0 ? 0.55 : 0.77} /></div>
+        <div className={`player skin--${selectedSkins[heroIndex]} ${heroAttacking ? 'player--attacking' : ''} ${flyMode ? 'player--flying' : ''} ${invulnerable ? 'player--hit' : ''} ${isJumping ? 'player--jump' : ''} ${isCrouching ? 'player--crouch' : ''} ${isMoving ? 'player--moving' : ''} ${facingLeft ? 'player--left' : ''}`} style={{ left: `${playerX}%`, ...(flyMode ? { bottom:`${13 + flightY}%` } : {}) }} onAnimationEnd={(event) => { if (event.animationName === 'jump' || event.animationName === 'jump-left') setIsJumping(false); }}><HeroSprite src={activeHeroAsset} className="hero-sprite hero-sprite--base" fitScale={heroIndex === 0 ? 0.55 : 0.77} /><HeroSprite src={activeHeroRunAsset} className="hero-sprite hero-sprite--run-frame" fitScale={heroIndex === 0 ? 0.55 : 0.77} />{heroAttacking && <i className="hero-muzzle-flash" />}</div>
         {secondPlayerReady && <div className={`player player--two ${invulnerable ? 'player--hit' : ''} ${isJumping2 ? 'player--jump' : ''} ${isMoving2 ? 'player--moving' : ''} ${facingLeft2 ? 'player--left' : ''}`} style={{ left:`${player2X}%` }} onAnimationEnd={(event) => { if (event.animationName === 'jump' || event.animationName === 'jump-left') setIsJumping2(false); }}><HeroSprite src={heroes[hero2Index].asset} className="hero-sprite hero-sprite--base" fitScale={hero2Index === 0 ? .55 : .77} /><HeroSprite src={heroes[hero2Index].runAsset} className="hero-sprite hero-sprite--run-frame" fitScale={hero2Index === 0 ? .55 : .77} /><b className="player-number">2</b></div>}
         {onlineMode && !secondPlayerReady && <div className="online-waiting"><i /><span>ОЖИДАНИЕ ВТОРОГО ИГРОКА</span><small>Комната: {onlineRoom}</small></div>}
         <div className="floor" />
@@ -462,6 +511,7 @@ export default function App() {
             <label><span>{t.music}: {musicEnabled ? t.soundOn : t.soundOff}</span><button className="setting-toggle" onClick={() => setMusicEnabled((value) => !value)}>{musicEnabled ? '🔊' : '🔇'}</button></label>
             <label><span>{t.volume}: {Math.round(musicVolume * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>
             <label><span>{t.language}</span><select value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="ru">Русский</option><option value="en">English</option><option value="fr">Français</option></select></label>
+            <label><span>Устройство</span><select value={deviceMode} onChange={(event) => setDeviceMode(event.target.value as DeviceMode)}><option value="auto">Авто</option><option value="desktop">Компьютер</option><option value="mobile">Телефон</option></select></label>
             <label className="cheat-field"><span>Чит-код</span><input value={cheatInput} onChange={(event) => setCheatInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') activateCheat(); }} placeholder="Введи код" /></label>
           </div>
           {cheatMessage && <small className="cheat-message">{cheatMessage}</small>}
